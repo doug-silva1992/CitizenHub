@@ -1,0 +1,87 @@
+name: citizenhub
+
+services:
+  # ---------- Backend (Laravel API) ----------
+  backend:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: citizenhub-backend
+    restart: unless-stopped
+    environment:
+      RUN_MIGRATIONS: "true"
+      DB_CONNECTION: pgsql
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_DATABASE: ${DB_DATABASE:-citizenhub}
+      DB_USERNAME: ${DB_USERNAME:-citizenhub}
+      DB_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - ./backend:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - citizenhub
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: citizenhub-nginx
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:80"
+    volumes:
+      - ./backend:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    networks:
+      - citizenhub
+
+  # ---------- Frontend (React + Vite) ----------
+  frontend:
+    image: node:22-alpine
+    container_name: citizenhub-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    environment:
+      API_PROXY_TARGET: http://nginx:80
+      CHOKIDAR_USEPOLLING: "true"
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    depends_on:
+      - nginx
+    networks:
+      - citizenhub
+
+  # ---------- Banco de dados ----------
+  db:
+    image: postgres:17-alpine
+    container_name: citizenhub-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-citizenhub}
+      POSTGRES_USER: ${DB_USERNAME:-citizenhub}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    ports:
+      - "${DB_FORWARD_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - citizenhub
+
+volumes:
+  pgdata:
+  frontend_node_modules:
+
+networks:
+  citizenhub:
+    driver: bridge
